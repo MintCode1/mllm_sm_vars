@@ -51,13 +51,13 @@ elif not (sys.platform.startswith("linux") or sys.platform.startswith("darwin"))
     )
     VLLM_TARGET_DEVICE = "empty"
 elif sys.platform.startswith("linux") and os.getenv("VLLM_TARGET_DEVICE") is None:
-    if torch.version.hip is not None:
+    if getattr(torch.version, "hip", None) is not None:
         VLLM_TARGET_DEVICE = "rocm"
         logger.info("Auto-detected ROCm")
-    elif torch.version.xpu is not None:
+    elif getattr(torch.version, "xpu", None) is not None:
         VLLM_TARGET_DEVICE = "xpu"
         logger.info("Auto-detected XPU")
-    elif torch.version.cuda is not None:
+    elif getattr(torch.version, "cuda", None) is not None:
         VLLM_TARGET_DEVICE = "cuda"
         logger.info("Auto-detected CUDA")
     else:
