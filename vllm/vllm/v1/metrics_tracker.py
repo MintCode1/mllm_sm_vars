@@ -16,6 +16,9 @@ class MetricsTracker:
 
     def __init__(self):
         """Initialize the metrics tracker."""
+        self.encoder_times = []
+        self.prefill_times = []
+        self.decode_times = []
         self.reset()
 
     def reset(self):
@@ -25,9 +28,9 @@ class MetricsTracker:
         self.start_time = None
         self.end_time = None
 
-        self.encoder_times = []
-        self.prefill_times = []
-        self.decode_times = []
+        self.encoder_times.clear()
+        self.prefill_times.clear()
+        self.decode_times.clear()
 
     def start_run(self):
         """Mark the start of the measurement run."""
@@ -52,6 +55,9 @@ class MetricsTracker:
             phase: Phase name ("encoder", "prefill", or "decode")
             duration: Duration in seconds
         """
+        if phase == "vision_encode":
+            phase = "encoder"
+
         if phase == "encoder":
             self.encoder_times.append(duration)
         elif phase == "prefill":
@@ -66,19 +72,28 @@ class MetricsTracker:
             dict: Summary containing average latency, throughput, and phase timings
         """
         total_time = self.end_time - self.start_time if self.end_time else 0
+        encoder_avg = (
+            sum(self.encoder_times) / len(self.encoder_times)
+            if self.encoder_times
+            else 0
+        )
+        prefill_avg = (
+            sum(self.prefill_times) / len(self.prefill_times)
+            if self.prefill_times
+            else 0
+        )
+        decode_avg = (
+            sum(self.decode_times) / len(self.decode_times)
+            if self.decode_times
+            else 0
+        )
 
         return {
             "avg_latency": sum(self.request_latencies) / len(self.request_latencies)
             if self.request_latencies
             else 0,
             "throughput_tok_per_s": self.total_tokens / total_time if total_time > 0 else 0,
-            "encoder_avg": sum(self.encoder_times) / len(self.encoder_times)
-            if self.encoder_times
-            else 0,
-            "prefill_avg": sum(self.prefill_times) / len(self.prefill_times)
-            if self.prefill_times
-            else 0,
-            "decode_avg": sum(self.decode_times) / len(self.decode_times)
-            if self.decode_times
-            else 0,
+            "encoder_avg": encoder_avg,
+            "prefill_avg": prefill_avg,
+            "decode_avg": decode_avg,
         }

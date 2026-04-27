@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+import time
+
 import numpy as np
 import torch
 
@@ -52,6 +54,9 @@ class EncoderRunner:
         self,
         mm_kwargs: list[tuple[str, MultiModalKwargsItem]],
     ) -> list[torch.Tensor]:
+        tracker = getattr(self.model, "metrics", None)
+        enc_start = time.time()
+
         encoder_outputs: list[torch.Tensor] = []
         for modality, num_items, mm_kwargs_batch in group_and_batch_mm_kwargs(
             mm_kwargs, device=self.device, pin_memory=False
@@ -59,6 +64,11 @@ class EncoderRunner:
             batch_outputs = self.model.embed_multimodal(**mm_kwargs_batch)
             sanity_check_mm_encoder_outputs(batch_outputs, expected_num_items=num_items)
             encoder_outputs.extend(batch_outputs)
+
+        enc_end = time.time()
+        if tracker is not None:
+            tracker.record_phase("encoder", enc_end - enc_start)
+
         return encoder_outputs
 
     def gather_mm_embeddings(

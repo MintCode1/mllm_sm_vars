@@ -296,7 +296,7 @@ def get_xpu_available():
 
 def get_xpu_runtime_version():
     if TORCH_AVAILABLE and hasattr(torch.version, "xpu"):
-        return torch.version.xpu
+        return getattr(torch.version, "xpu", None)
     return None
 
 

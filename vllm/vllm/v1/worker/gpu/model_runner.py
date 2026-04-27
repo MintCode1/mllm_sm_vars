@@ -99,7 +99,7 @@ from vllm.v1.worker.gpu.spec_decode.utils import DraftTokensHandler
 from vllm.v1.worker.gpu.states import RequestState
 from vllm.v1.worker.gpu.structured_outputs import StructuredOutputsWorker
 from vllm.v1.worker.lora_model_runner_mixin import LoRAModelRunnerMixin
-from vllm.v1.utils.metrics_tracker import MetricsTracker
+from vllm.v1.metrics_tracker import MetricsTracker
 
 logger = init_logger(__name__)
 
@@ -274,6 +274,10 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             self.model = model_loader.load_model(
                 vllm_config=self.vllm_config, model_config=self.vllm_config.model_config
             )
+            if hasattr(self.model, "set_metrics"):
+                self.model.set_metrics(self.metrics)
+            else:
+                setattr(self.model, "metrics", self.metrics)
             if self.lora_config:
                 self.model = self.load_lora_model(
                     self.model, self.vllm_config, self.device

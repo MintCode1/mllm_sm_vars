@@ -55,6 +55,7 @@ from vllm.v1.outputs import (
     ModelRunnerOutput,
 )
 from vllm.v1.utils import compute_iteration_details, report_usage_stats
+from vllm.v1.libsmctrl import get_stream_mask_touch_count
 from vllm.v1.worker.utils import is_residual_scattered_for_sp
 from vllm.v1.worker.worker_base import CompilationTimes, WorkerBase
 from vllm.v1.worker.workspace import init_workspace_manager
@@ -900,6 +901,36 @@ class Worker(WorkerBase):
     def execute_dummy_batch(self) -> None:
         num_tokens = getattr(self.model_runner, "uniform_decode_query_len", 1)
         self.model_runner._dummy_run(num_tokens, uniform_decode=True)
+
+    def reset_metrics(self) -> None:
+        metrics = getattr(self.model_runner, "metrics", None)
+        if metrics is not None:
+            metrics.reset()
+
+    def start_metrics_run(self) -> None:
+        metrics = getattr(self.model_runner, "metrics", None)
+        if metrics is not None:
+            metrics.start_run()
+
+    def end_metrics_run(self) -> None:
+        metrics = getattr(self.model_runner, "metrics", None)
+        if metrics is not None:
+            metrics.end_run()
+
+    def get_metrics_summary(self) -> dict[str, float]:
+        metrics = getattr(self.model_runner, "metrics", None)
+        if metrics is None:
+            return {
+                "avg_latency": 0.0,
+                "throughput_tok_per_s": 0.0,
+                "encoder_avg": 0.0,
+                "prefill_avg": 0.0,
+                "decode_avg": 0.0,
+            }
+        return metrics.summary()
+
+    def get_stream_mask_touch_count(self) -> int:
+        return get_stream_mask_touch_count()
 
     def add_lora(self, lora_request: LoRARequest) -> bool:
         return self.model_runner.add_lora(lora_request)
