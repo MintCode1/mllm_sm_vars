@@ -8,14 +8,12 @@ For each workload configuration, this script runs:
 1) Sequential mode: prefill-heavy request then decode-heavy request.
 2) Overlap mode: staggered asynchronous submission via separate threads.
 
-Then it averages key metrics across trials, saves structured CSV results,
-and generates comparison plots.
+Then it averages raw metrics across trials, saves structured CSV results,
+and generates configuration-level comparison plots.
 """
 
-import csv
 import gc
 import inspect
-import math
 import os
 import subprocess
 import threading
@@ -45,10 +43,14 @@ STAGGER_SECONDS = 0.05
 NUM_TRIALS = 3
 
 CONFIGS = [
-    {"prefill_len": 512, "decode_len": 100},
-    {"prefill_len": 512, "decode_len": 300},
-    {"prefill_len": 1024, "decode_len": 100},
-    {"prefill_len": 1024, "decode_len": 300},
+    {"prefill_len": 256, "decode_len": 50},
+    {"prefill_len": 256, "decode_len": 200},
+    {"prefill_len": 512, "decode_len": 50},
+    {"prefill_len": 512, "decode_len": 200},
+    {"prefill_len": 768, "decode_len": 100},
+    {"prefill_len": 768, "decode_len": 300},
+    {"prefill_len": 1024, "decode_len": 50},
+    {"prefill_len": 1024, "decode_len": 200},
 ]
 
 SHORT_PROMPT = "Hello"
@@ -59,9 +61,7 @@ PLOT_THROUGHPUT = "throughput_vs_config.png"
 PLOT_WALLTIME = "walltime_vs_config.png"
 PLOT_POWER_EFF = "power_efficiency_vs_config.png"
 PLOT_IMPROVEMENT_CFG = "improvement_vs_config.png"
-PLOT_IMPROVEMENT_RATIO = "improvement_vs_ratio.png"
-PLOT_IMPROVEMENT_SLACK = "improvement_vs_slack.png"
-PLOT_IMPROVEMENT_REG = "improvement_regression.png"
+PLOT_IMPROVEMENT_TOKENS = "improvement_vs_tokens.png"
 
 ANALYSIS_DIR = "experiment_outputs/multiplexing_refined"
 ANALYSIS_CSV = os.path.join(ANALYSIS_DIR, "results_multiplexing_sweep_refined.csv")
@@ -69,9 +69,7 @@ ANALYSIS_PLOT_THROUGHPUT = os.path.join(ANALYSIS_DIR, PLOT_THROUGHPUT)
 ANALYSIS_PLOT_WALLTIME = os.path.join(ANALYSIS_DIR, PLOT_WALLTIME)
 ANALYSIS_PLOT_POWER_EFF = os.path.join(ANALYSIS_DIR, PLOT_POWER_EFF)
 ANALYSIS_PLOT_IMPROVEMENT_CFG = os.path.join(ANALYSIS_DIR, PLOT_IMPROVEMENT_CFG)
-ANALYSIS_PLOT_IMPROVEMENT_RATIO = os.path.join(ANALYSIS_DIR, PLOT_IMPROVEMENT_RATIO)
-ANALYSIS_PLOT_IMPROVEMENT_SLACK = os.path.join(ANALYSIS_DIR, PLOT_IMPROVEMENT_SLACK)
-ANALYSIS_PLOT_IMPROVEMENT_REG = os.path.join(ANALYSIS_DIR, PLOT_IMPROVEMENT_REG)
+ANALYSIS_PLOT_IMPROVEMENT_TOKENS = os.path.join(ANALYSIS_DIR, PLOT_IMPROVEMENT_TOKENS)
 
 MODEL_CANDIDATES = [
     "OpenGVLab/InternVL3-2B",
@@ -216,9 +214,35 @@ def write_results_csv(df) -> None:
     df.to_csv(ANALYSIS_CSV, index=False)
 
 
-def make_plots(df) -> None:
+def build_improvement_df(df):
+    import pandas as pd
+
+    pivot = (
+        df.pivot_table(
+            index=["prefill_len", "decode_len"],
+            columns="mode",
+            values=["throughput", "wall_time"],
+            aggfunc="first",
+        )
+        .reset_index()
+    )
+
+    seq_thr = pivot[("throughput", "sequential")]
+    ovl_thr = pivot[("throughput", "overlap")]
+
+    return pd.DataFrame(
+        {
+            "prefill_len": pivot[("prefill_len", "")],
+            "decode_len": pivot[("decode_len", "")],
+            "throughput_seq": seq_thr,
+            "throughput_overlap": ovl_thr,
+            "throughput_improvement_pct": (ovl_thr - seq_thr) / seq_thr * 100.0,
+        }
+    )
+
+
+def make_plots(df, improvement_df) -> None:
     import matplotlib.pyplot as plt
-    import numpy as np
     import pandas as pd
 
     df["config"] = df.apply(
@@ -264,16 +288,17 @@ def make_plots(df) -> None:
         output=ANALYSIS_PLOT_POWER_EFF,
     )
 
-    benefit_df = (
-        df[df["mode"] == "overlap"]
-        .copy()
-        .sort_values("config")
-    )
+    improvement_df = improvement_df.copy()
+    improvement_df["config"] = improvement_df.apply(
+        lambda r: f"P{int(r['prefill_len'])}-D{int(r['decode_len'])}", axis=1)
+    improvement_df["config"] = pd.Categorical(
+        improvement_df["config"], categories=order, ordered=True)
+    improvement_df = improvement_df.sort_values("config")
 
     plt.figure(figsize=(9, 5))
     plt.plot(
-        benefit_df["config"],
-        benefit_df["throughput_improvement_pct"],
+        improvement_df["config"],
+        improvement_df["throughput_improvement_pct"],
         marker="o",
         linewidth=2,
     )
@@ -285,124 +310,53 @@ def make_plots(df) -> None:
     plt.savefig(ANALYSIS_PLOT_IMPROVEMENT_CFG, dpi=200)
     plt.close()
 
-    plt.figure(figsize=(9, 5))
-    plt.scatter(
-        benefit_df["prefill_decode_ratio"],
-        benefit_df["throughput_improvement_pct"],
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharey=True)
+    axes[0].scatter(
+        improvement_df["prefill_len"],
+        improvement_df["throughput_improvement_pct"],
+        s=60,
     )
-    plt.xlabel("Prefill / Decode Ratio")
-    plt.ylabel("Throughput Improvement (%)")
-    plt.title("Benefit vs Phase Balance")
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(ANALYSIS_PLOT_IMPROVEMENT_RATIO, dpi=200)
-    plt.close()
+    axes[0].set_xlabel("Prefill Tokens")
+    axes[0].set_ylabel("Throughput Improvement (%)")
+    axes[0].set_title("Improvement vs Prefill Tokens")
+    axes[0].grid(True, alpha=0.3)
 
-    plt.figure(figsize=(9, 5))
-    plt.scatter(
-        benefit_df["slack"],
-        benefit_df["throughput_improvement_pct"],
+    axes[1].scatter(
+        improvement_df["decode_len"],
+        improvement_df["throughput_improvement_pct"],
+        s=60,
+        color="tab:orange",
     )
-    plt.xlabel("Compute Slack (prefill_avg - decode_avg)")
-    plt.ylabel("Throughput Improvement (%)")
-    plt.title("Overlap Benefit vs Compute Slack")
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(ANALYSIS_PLOT_IMPROVEMENT_SLACK, dpi=200)
-    plt.close()
+    axes[1].set_xlabel("Decode Tokens")
+    axes[1].set_title("Improvement vs Decode Tokens")
+    axes[1].grid(True, alpha=0.3)
 
-    x = benefit_df["balance"].to_numpy(dtype=float)
-    y = benefit_df["throughput_improvement_pct"].to_numpy(dtype=float)
-    slope, intercept = np.polyfit(x, y, 1)
-    y_fit = slope * x + intercept
-
-    plt.figure(figsize=(9, 5))
-    plt.scatter(x, y, label="configs")
-    order_idx = np.argsort(x)
-    plt.plot(x[order_idx], y_fit[order_idx], color="tab:red", label="linear fit")
-    plt.xlabel("Balance = min(prefill, decode) / max(prefill, decode)")
-    plt.ylabel("Throughput Improvement (%)")
-    plt.title("Overlap Benefit vs Workload Balance (Regression)")
-    plt.grid(True, alpha=0.3)
-    plt.legend()
     plt.tight_layout()
-    plt.savefig(ANALYSIS_PLOT_IMPROVEMENT_REG, dpi=200)
+    plt.savefig(ANALYSIS_PLOT_IMPROVEMENT_TOKENS, dpi=200)
     plt.close()
 
 
-def build_analysis_dataframe(rows: list[dict]):
+def build_raw_dataframe(rows: list[dict]):
     import pandas as pd
 
-    df = pd.DataFrame(rows)
+    return pd.DataFrame(rows)
 
-    pivot = (
-        df.pivot_table(
-            index=["prefill_len", "decode_len"],
-            columns="mode",
-            values=["throughput", "wall_time"],
-            aggfunc="first",
+
+def print_final_table(improvement_df) -> None:
+    rows = improvement_df.sort_values(["prefill_len", "decode_len"]) 
+
+    print("\nFinal raw throughput table")
+    print(
+        "config | prefill | decode | throughput_seq | "
+        "throughput_overlap | improvement%"
+    )
+    for _, row in rows.iterrows():
+        config = f"P{int(row['prefill_len'])}-D{int(row['decode_len'])}"
+        print(
+            f"{config} | {int(row['prefill_len'])} | {int(row['decode_len'])} | "
+            f"{row['throughput_seq']:.3f} | {row['throughput_overlap']:.3f} | "
+            f"{row['throughput_improvement_pct']:.2f}%"
         )
-        .reset_index()
-    )
-
-    seq_thr = pivot[("throughput", "sequential")]
-    ovl_thr = pivot[("throughput", "overlap")]
-    seq_wall = pivot[("wall_time", "sequential")]
-    ovl_wall = pivot[("wall_time", "overlap")]
-
-    throughput_improvement_pct = (ovl_thr - seq_thr) / seq_thr * 100.0
-    latency_improvement_pct = (seq_wall - ovl_wall) / seq_wall * 100.0
-
-    improvement_df = pd.DataFrame(
-        {
-            "prefill_len": pivot[("prefill_len", "")],
-            "decode_len": pivot[("decode_len", "")],
-            "throughput_improvement_pct": throughput_improvement_pct,
-            "latency_improvement_pct": latency_improvement_pct,
-        }
-    )
-
-    df = df.merge(improvement_df, on=["prefill_len", "decode_len"], how="left")
-    df["prefill_decode_ratio"] = df["prefill_len"] / df["decode_len"]
-    df["balance"] = df.apply(
-        lambda r: min(r["prefill_len"], r["decode_len"]) /
-        max(r["prefill_len"], r["decode_len"]),
-        axis=1,
-    )
-    df["slack"] = df["prefill_avg"] - df["decode_avg"]
-    return df
-
-
-def print_regression_stats(df) -> None:
-    import numpy as np
-
-    benefit_df = (
-        df[df["mode"] == "overlap"]
-        .copy()
-        .sort_values(["prefill_len", "decode_len"])
-    )
-    x_ratio = benefit_df["prefill_decode_ratio"].to_numpy(dtype=float)
-    x_log_ratio = np.log(x_ratio)
-    y = benefit_df["throughput_improvement_pct"].to_numpy(dtype=float)
-
-    def fit_and_r2(x, y_values):
-        slope, intercept = np.polyfit(x, y_values, 1)
-        y_pred = slope * x + intercept
-        ss_res = np.sum((y_values - y_pred) ** 2)
-        ss_tot = np.sum((y_values - np.mean(y_values)) ** 2)
-        r2 = 1.0 - ss_res / ss_tot if ss_tot else 0.0
-        return slope, r2
-
-    slope_ratio, r2_ratio = fit_and_r2(x_ratio, y)
-    slope_log_ratio, r2_log_ratio = fit_and_r2(x_log_ratio, y)
-
-    print("\nRegression: throughput_improvement_pct ~ prefill_decode_ratio")
-    print(f"  slope={slope_ratio:.6f}")
-    print(f"  R^2={r2_ratio:.6f}")
-
-    print("Regression: throughput_improvement_pct ~ log(prefill_decode_ratio)")
-    print(f"  slope={slope_log_ratio:.6f}")
-    print(f"  R^2={r2_log_ratio:.6f}")
 
 
 def main():
@@ -512,13 +466,11 @@ def main():
         print(f"  throughput improvement={improvement:.2f}%")
         print(f"  power efficiency seq={seq_eff:.4f}, overlap={ovl_eff:.4f}")
 
-    analysis_df = build_analysis_dataframe(averaged_rows)
-    write_results_csv(analysis_df)
-    make_plots(analysis_df)
-    print_regression_stats(analysis_df)
-
-    print("Observation:")
-    print("Overlap provides maximum benefit when workload balance enables compute slack, allowing memory-bound decode to be hidden under compute-bound prefill.")
+    raw_df = build_raw_dataframe(averaged_rows)
+    write_results_csv(raw_df)
+    improvement_df = build_improvement_df(raw_df)
+    make_plots(raw_df, improvement_df)
+    print_final_table(improvement_df)
 
     print("\n" + "-" * 60)
     print("SWEEP COMPLETE")
@@ -528,9 +480,7 @@ def main():
     print(f"Saved plot: {ANALYSIS_PLOT_WALLTIME}")
     print(f"Saved plot: {ANALYSIS_PLOT_POWER_EFF}")
     print(f"Saved plot: {ANALYSIS_PLOT_IMPROVEMENT_CFG}")
-    print(f"Saved plot: {ANALYSIS_PLOT_IMPROVEMENT_RATIO}")
-    print(f"Saved plot: {ANALYSIS_PLOT_IMPROVEMENT_SLACK}")
-    print(f"Saved plot: {ANALYSIS_PLOT_IMPROVEMENT_REG}")
+    print(f"Saved plot: {ANALYSIS_PLOT_IMPROVEMENT_TOKENS}")
 
     # Release engine resources after the full sweep.
     llm.llm_engine.engine_core.shutdown()

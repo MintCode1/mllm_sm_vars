@@ -1,0 +1,37 @@
+{
+  "passed": false,
+  "full": {
+    "active_sms": 132,
+    "active_tpcs": 66,
+    "encoder_latency": 0.0,
+    "prefill_latency": 0.0075391122000000015,
+    "decode_latency": 0.0666362866,
+    "encoder_throughput": 0.0,
+    "prefill_throughput": 67912.50566611807,
+    "decode_throughput": 150.06838631371156,
+    "encoder_power": 0.0,
+    "prefill_power": 140.6405714285714,
+    "decode_power": 141.0226014492755,
+    "total_latency": 0.006732342459938743,
+    "total_throughput": 139.99800287552546,
+    "total_power": 140.90051875000015
+  },
+  "low": {
+    "active_sms": 4,
+    "active_tpcs": 2,
+    "encoder_latency": 0.0,
+    "prefill_latency": 0.007711969399999999,
+    "decode_latency": 0.066924124,
+    "encoder_throughput": 0.0,
+    "prefill_throughput": 66390.30492003768,
+    "decode_throughput": 149.42294948828913,
+    "encoder_power": 0.0,
+    "prefill_power": 149.1539444444444,
+    "decode_power": 150.24839160839133,
+    "total_latency": 0.006773014502091841,
+    "total_throughput": 137.79963663483116,
+    "total_power": 150.14547590361414
+  },
+  "latency_ratio_low_over_full": 1.0060412913328638,
+  "throughput_ratio_low_over_full": 0.9842971599912829
+}
